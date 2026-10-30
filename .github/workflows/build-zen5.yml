@@ -57,22 +57,13 @@ env:
   CCACHE_DIR: /home/builder/.ccache
 
 jobs:
-  build:
-    name: ${{ inputs.variant || 'linux-cachyos' }} (${{ inputs.processor_opt || 'zen5' }})
+  cleanup:
+    name: Free disk space (host VM, before container build)
     runs-on: ubuntu-24.04
-    container:
-      # Правильный путь на Docker Hub: репозиторий archlinux/archlinux, тег base-devel
-      image: archlinux/archlinux:base-devel
+    # ВАЖНО: без container: — экшен maximize-build-disk-space чистит ХОСТОВУЮ VM
+    # раннера (требуются sudo + docker, которых нет внутри Arch-контейнера).
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Maximize build disk space (remove unneeded VM tools before build)
-        # Экшен из GitHub Marketplace: JarvusInnovations/configlab-maximize-build-space
-        # ("Maximize build disk space"). Вычищает с раннера ненужные инструменты —
-        # образы ОС в /mnt, .NET/Android/GHC/CodeQL тулчейны, неиспользуемые
-        # docker-образы и кэш apt — освобождая до ~25+ ГБ под сборку ядра ThinLTO.
-        # continue-on-error: чистка не должна ломать сборку.
+      - name: Maximize build disk space
         uses: JarvusInnovations/configlab-maximize-build-space@master
         continue-on-error: true
         with:
@@ -83,8 +74,16 @@ jobs:
           remove-docker-images: 'true'
           overprovision-pxd-partition: 'false'
 
-      - name: Disk usage after cleanup
-        run: df -h / /mnt 2>/dev/null || true
+  build:
+    name: ${{ inputs.variant || 'linux-cachyos' }} (${{ inputs.processor_opt || 'zen5' }})
+    needs: cleanup
+    runs-on: ubuntu-24.04
+    container:
+      # Правильный путь на Docker Hub: репозиторий archlinux/archlinux, тег base-devel
+      image: archlinux/archlinux:base-devel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup build environment (Arch + CachyOS repo, ccache, builder user)
         run: |
