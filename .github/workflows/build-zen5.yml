@@ -58,7 +58,8 @@ jobs:
     name: ${{ inputs.variant || 'linux-cachyos' }} (${{ inputs.processor_opt || 'zen5' }})
     runs-on: ubuntu-24.04
     container:
-      image: archlinux/base-devel:latest
+      # Правильный путь на Docker Hub: репозиторий archlinux/archlinux, тег base-devel
+      image: archlinux/archlinux:base-devel
     steps:
       - name: Checkout
         uses: actions/checkout@v4
