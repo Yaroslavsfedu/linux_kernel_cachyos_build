@@ -1,0 +1,148 @@
+# ============================================================================
+# Сборка ядра linux-cachyos с оптимизацией под AMD Ryzen 5 9600X (Zen 5 / znver5)
+# на сервере GitHub Actions.
+#
+# ГЛАВНОЕ: процессор сборочного раннера НЕ используется для автоопределения!
+#   NATIVE/x86-native-cpu ЗАПРЕЩЁН — вместо него жёстко выставляется
+#   _processor_opt=zen5 (CONFIG_MZEN5 -> -march=znver5/-mtune=znver5).
+#   Ядро, собранное на серверном Xeon/EPYC, будет использовать все инструкции
+#   Zen 5 (AVX-512 и т.д.) на вашем 9600X.
+#
+# Как пользоваться:
+#   1. Форкните https://github.com/CachyOS/linux-cachyos ИЛИ скопируйте папки
+#      linux-cachyos-* в корень этого репозитория.
+#   2. Push в main / запуск через Actions -> "Build CachyOS kernel (Zen 5)".
+#   3. Скачайте артефакт *.pkg.tar.zst и установите:
+#        sudo pacman -U linux-cachyos-cachyos-*.pkg.tar.zst
+# ============================================================================
+name: Build CachyOS kernel (Zen 5 / Ryzen 5 9600X)
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Вариант ядра (папка в репозитории)'
+        required: true
+        default: 'linux-cachyos'
+        type: choice
+        options: [linux-cachyos, linux-cachyos-bore, linux-cachyos-eevdf, linux-cachyos-bmq, linux-cachyos-server, linux-cachyos-lts]
+      processor_opt:
+        description: 'Оптимизация компилятора под CPU'
+        required: true
+        default: 'zen5'
+        type: choice
+        options: [zen5, zen4, GENERIC_V4, GENERIC_V3, generic]
+      llvm_lto:
+        description: 'LLVM LTO режим'
+        required: true
+        default: 'thin'
+        type: choice
+        options: [thin, full, none]
+      cpusched:
+        description: 'CPU-планировщик'
+        required: true
+        default: 'cachyos'
+        type: choice
+        options: [cachyos, bore, eevdf, bmq]
+      hz:
+        description: 'Tick rate (HZ)'
+        required: true
+        default: '1000'
+        type: choice
+        options: ['1000', '750', '600', '500', '300', '250', '100']
+env:
+  CCACHE_DIR: /home/builder/.ccache
+
+jobs:
+  build:
+    name: ${{ inputs.variant || 'linux-cachyos' }} (${{ inputs.processor_opt || 'zen5' }})
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux/base-devel:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup build environment (Arch + CachyOS repo, ccache, builder user)
+        run: |
+          cat << 'EOF' >> /etc/pacman.conf
+          [cachyos]
+          Server = https://mirror.cachyos.org/repo/x86_64/cachyos
+          EOF
+
+          pacman-key --init
+          pacman-key --populate archlinux
+          # Ключ репозитория CachyOS
+          pacman-key --recv-keys F3B607488DB35A47 --keyserver keyserver.ubuntu.com
+          pacman-key --lsign-key F3B607488DB35A47
+
+          pacman -Syu --noconfirm --needed git ccache clang llvm lld
+
+          useradd builder -m
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chmod -R a+rw .
+
+          # Все ядра сборки
+          sed -i 's/#MAKEFLAGS="-j2"/MAKEFLAGS="-j$(nproc) -l$(nproc)"/g' /etc/makepkg.conf
+          sed -i 's|#PACKAGER=".*"|PACKAGER="GitHub Actions (Zen5 CI)"|g' /etc/makepkg.conf
+          sed -i 's|!ccache|ccache|' /etc/makepkg.conf
+          install -d -m 777 "$CCACHE_DIR"
+
+      - name: Patch PKGBUILDs for Zen 5 (znver5) support
+        # Добавляет ветку ZEN5 в case "$MARCH" и запрещает CI переключать
+        # сборку на -Os (иначе "оптимизация под 9600X" теряет смысл).
+        run: |
+          chmod +x zen5-patches.sh
+          ./zen5-patches.sh .
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ inputs.variant || 'linux-cachyos' }}-${{ inputs.llvm_lto || 'thin' }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ inputs.variant || 'linux-cachyos' }}-${{ inputs.llvm_lto || 'thin' }}
+
+      - name: Build kernel package (optimized for Ryzen 5 9600X / znver5)
+        env:
+          # ---- КЛЮЧЕВОЕ: целевой CPU = Zen 5, а НЕ CPU раннера -------------
+          # zen5 -> CONFIG_MZEN5 -> -march=znver5 -mtune=znver5 (GCC>=14/Clang>=18)
+          _processor_opt: ${{ inputs.processor_opt || 'zen5' }}
+          _cachy_config: yes          # Cachy OS tuning (sched/tunable tweaks)
+          _cpusched: ${{ inputs.cpusched || 'cachyos' }}   # cachyos = EEVDF+BORE-альтернатива по умолчанию
+          _use_llvm_lto: ${{ inputs.llvm_lto || 'thin' }}  # thin LTO через clang/lld
+          _cc_harder: yes             # KBUILD_CFLAGS -O3
+          _HZ_ticks: ${{ inputs.hz || '1000' }}
+          _tickrate: full
+          _preempt: full
+          _hugepage: always           # THP always — хорошо для desktop Zen5
+          _per_gov: no
+          _tcp_bbr3: no
+          _build_zfs: no
+          _build_nvidia_open: no
+          _localmodcfg: no
+          _use_current: no
+        run: |
+          cd "${{ inputs.variant || 'linux-cachyos' }}"
+          sudo -H -E -u builder makepkg --skipchecksums --syncdeps --noconfirm
+
+      - name: Verify the produced kernel really targets znver5
+        run: |
+          pkg=$(ls "${{ inputs.variant || 'linux-cachyos' }}"/*.pkg.tar.zst | head -1)
+          echo "Inspecting $pkg"
+          tar -xOf "$pkg" '.PKGINFO' || true
+          # конфиг ядра внутри пакета: проверяем MZEN5/znver5 и отсутствие NATIVE
+          tar -xOf "$pkg" usr/lib/modules/*/config 2>/dev/null \
+            | grep -E 'CONFIG_MZEN5|CONFIG_X86_NATIVE_CPU|CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3|CONFIG_GENERIC_CPU=' || true
+          tar -xOf "$pkg" usr/lib/modules/*/config 2>/dev/null \
+            | grep -q 'CONFIG_MZEN5=y' && echo "OK: kernel built for Zen 5 (znver5)"
+
+      - name: Upload packages as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-cachyos-zen5-${{ inputs.llvm_lto || 'thin' }}
+          path: |
+            ${{ inputs.variant || 'linux-cachyos' }}/*.pkg.tar.zst
+            ${{ inputs.variant || 'linux-cachyos' }}/*.pkg.tar.zst.sig
+          if-no-files-found: error
+          retention-days: 14
