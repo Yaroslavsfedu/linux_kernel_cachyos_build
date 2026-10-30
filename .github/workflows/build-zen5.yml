@@ -232,16 +232,6 @@ jobs:
           _use_current: no
         run: |
           cd "${{ inputs.variant || 'linux-cachyos' }}"
-          # если config был урезан (trim/localmod), гарантированно возвращаем ключевые
-          # опции ядра/производительности (scripts/config правит .config-подобный файл
-          # без дерева исходников; PKGBUILD скопирует config -> .config в prepare())
-          if [ -f config.orig ]; then
-            for opt in CACHY THINLTO CC_OPTIMIZE_FOR_PERFORMANCE_O3 HZ_1000 \
-                       PREEMPT_FULL_PREEMPTION TRANSPARENT_HUGEPAGE_ALWAYS; do
-              grep -q "^CONFIG_${opt}=" config || echo "CONFIG_${opt}=y" >> config
-            done
-            grep -q '^CONFIG_MZEN4=' config || echo "CONFIG_MZEN4=y" >> config
-          fi
           sudo -H -E -u builder makepkg --skipchecksums --syncdeps --noconfirm
 
       - name: Verify the produced kernel really targets znver5
