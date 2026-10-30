@@ -57,26 +57,8 @@ env:
   CCACHE_DIR: /home/builder/.ccache
 
 jobs:
-  cleanup:
-    name: Free disk space (host VM, before container build)
-    runs-on: ubuntu-24.04
-    # ВАЖНО: без container: — экшен maximize-build-disk-space чистит ХОСТОВУЮ VM
-    # раннера (требуются sudo + docker, которых нет внутри Arch-контейнера).
-    steps:
-      - name: Maximize build disk space
-        uses: JarvusInnovations/configlab-maximize-build-space@master
-        continue-on-error: true
-        with:
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
-          overprovision-pxd-partition: 'false'
-
   build:
     name: ${{ inputs.variant || 'linux-cachyos' }} (${{ inputs.processor_opt || 'zen5' }})
-    needs: cleanup
     runs-on: ubuntu-24.04
     container:
       # Правильный путь на Docker Hub: репозиторий archlinux/archlinux, тег base-devel
@@ -84,6 +66,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Maximize build disk space (remove unneeded VM tools before build)
+        # Экшен из GitHub Marketplace "Maximize build disk space". ЧИСТИТ ХОСТОВУЮ
+        # VM раннера: удаляет ненужные инструменты (.NET/Android/GHC/CodeQL
+        # тулчейны, образы ОС в /mnt, неиспользуемые docker-образы, кэш apt) —
+        # освобождает до ~25+ ГБ под сборку ядра с ThinLTO. Требует sudo+docker на
+        # хосте, поэтому вызывается через run: wrapper (action-in-container ломал
+        # "Set up job"). continue-on-error — чистка никогда не валит сборку.
+        continue-on-error: true
+        run: |
+          echo "=== Disk BEFORE ==="; df -h / /mnt 2>/dev/null || true
+          set +e
+          # /mnt: образы Windows Server (~10+ ГБ)
+          sudo rm -rf /mnt/image* /mnt/data* 2>/dev/null
+          # ненужные тулчейны сред разработки
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                       /opt/hostedtoolcache/CodeQL /usr/local/share/powershell 2>/dev/null
+          # неиспользуемые docker-образы и buildx-кэш (кроме нужного arch)
+          sudo docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+            | grep -v '^archlinux/archlinux' | while read img; do sudo docker rmi -f "$img" 2>/dev/null; done
+          sudo docker builder prune -af 2>/dev/null
+          # кэш apt + man/doc
+          sudo rm -rf /var/lib/apt/lists/* /usr/share/man /usr/share/doc 2>/dev/null
+          set -e
+          echo "=== Disk AFTER ==="; df -h / /mnt 2>/dev/null || true
 
       - name: Setup build environment (Arch + CachyOS repo, ccache, builder user)
         run: |
