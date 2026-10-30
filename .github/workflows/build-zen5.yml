@@ -47,6 +47,15 @@ on:
         default: 'cachyos'
         type: choice
         options: [cachyos, bore, eevdf, bmq]
+      drivers_mode:
+        description: 'Количество драйверов в ядре'
+        required: true
+        default: 'trim'
+        type: choice
+        options:
+          - trim   # быстрый серверный cutdown (~20-30 мин сборки вместо ~2 ч)
+          - full   # полный дистрибутивный конфиг (все 15500+ модулей)
+          - localmod # ТОЧНО под ваше железо: modprobed.db из вашего ПК (см. BUILD-ZEN5.md)
       hz:
         description: 'Tick rate (HZ)'
         required: true
@@ -142,6 +151,44 @@ jobs:
         run: |
           chmod +x zen5-patches.sh
           ./zen5-patches.sh .
+
+      - name: Slim kernel config (cut unused drivers BEFORE build)
+        # ДРАЙВЕРЫ РЕЖУТСЯ ДО КОМПИЛЯЦИИ — make не строит то, чего нет в конфиге.
+        # Экономит и ВРЕМЯ (~2ч -> меньше), и МЕСТО на диске раннера.
+        #   trim     = desktop-cutdown slim-config.py: VM/серверные NIC/RAID/FC/eMMC/
+        #              NVDIMM/кластерные ФС/CAN-NFC-IIO/SPI-MFD/SoC-GPU/FB-legacy/
+        #              sound-SoC/Wi-Fi-old — ~1750 опций выключено
+        #   full     = ничего не трогаем (полный дистрибутивный конфиг, ~15500 модулей)
+        #   localmod = ТОЧНО под ваше железо: modprobed.db вашего ПК + _localmodcfg=yes
+        env:
+          DRIVERS_MODE: ${{ inputs.drivers_mode || 'trim' }}
+        run: |
+          set -e
+          cd "${{ inputs.variant || 'linux-cachyos' }}"
+
+          if [ "$DRIVERS_MODE" = "full" ]; then
+            echo "drivers_mode=full: config не трогаем"
+            exit 0
+          fi
+          if [ "$DRIVERS_MODE" = "localmod" ]; then
+            sed -i 's/: "${_localmodcfg:=no}"/: "${_localmodcfg:=yes}"/' PKGBUILD
+            grep -q '_localmodcfg:=yes' PKGBUILD || { echo "::error::не удалось включить _localmodcfg"; exit 1; }
+            echo "::notice::localmod требует modprobed-db (вашего ПК) в ~/.local/share/modprobed-db/modprobed.db у пользователя builder — см. BUILD-ZEN5.md"
+            exit 0
+          fi
+
+          # --- trim: точечное отключение лишних классов драйверов ---
+          cp -f config config.orig
+          python3 ../slim-config.py config
+          before=$(grep -cE '^CONFIG_[A-Z0-9_]+=[my]' config.orig)
+          after=$(grep -cE '^CONFIG_[A-Z0-9_]+=[my]' config)
+          echo "Включённых (=y/=m) было: $before, стало: $after"
+          # страховка: ключевые для Ryzen-десктопа опции обязаны остаться
+          for k in CONFIG_DRM_AMDGPU CONFIG_DRM_I915 CONFIG_SND_HDA_INTEL \
+                   CONFIG_USB_XHCI_HCD CONFIG_EXT4_FS CONFIG_KVM_AMD CONFIG_CFG80211; do
+            grep -q "^${k}=[my]" config || { echo "::error::$k пропала — стоп!"; exit 1; }
+          done
+          echo "OK: config урезан ДО сборки (резерв: config.orig)"
 
       - name: Restore ccache
         uses: actions/cache@v4

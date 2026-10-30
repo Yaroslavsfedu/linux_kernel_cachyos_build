@@ -87,3 +87,22 @@ _processor_opt=zen5 _use_llvm_lto=thin _cc_harder=yes makepkg -si --skipchecksum
   `cpusched=bore`; для стабильности/RT — `eevdf`.
 * Пакеты подписываются gpg-ключом сборщика; для продакшена добавьте свой
   `--sign` ключ в makepkg.
+
+## Режимы количества драйверов (drivers_mode)
+
+В форме запуска (workflow_dispatch) появился выбор **drivers_mode**:
+
+| режим | что делает | время сборки |
+|---|---|---|
+| `trim` (по умолчанию) | `slim-config.py` ДО компиляции выключает ~1750 опций: VM-драйверы (Xen/Hyper-V/VirtIO/VMware), серверные NIC (Mellanox/Chelsio/QLogic…), RAID/HBA/FC/iSCSI, eMMC/UFS/NVDIMM, кластерные ФС (OCFS2/GFS2/AFS…), CAN/NFC/IIO/SPI/MFD, SoC-GPU и legacy-FB, sound-SoC, старый Wi-Fi. Ядро/сеть/ext4-xfs-btrfs-f2fs/USB-core/BT/Wi-Fi(iwlwifi,mt76,rtw8x,ath11k,ath12k)/amdgpu-i915-xe/snd-hda/KVM — остаются | заметно меньше 2 ч |
+| `full` | полный дистрибутивный конфиг (~15500 модулей) | ~2 ч |
+| `localmod` | штатный `_localmodcfg=yes`: PKGBUILD прогоняет `make localmodconfig` по базе modprobed.db вашего ПК | самая быстрая, ядро ровно под ваше железо |
+
+### localmod: как подготовить базу с вашего ПК (Arch/CachyOS)
+```bash
+sudo pacman -S --aur modprobed-db        # или из AUR
+modprobed-db store                        # записывает ~/.local/share/modprobed-db/modprobed.db
+# затем файл modprobed.db нужно положить в CI: simplest — закоммитить в репозиторий
+# linux-cachyos/modprobed.db и раскомментировать шаг copy в workflow (TODO ниже)
+```
+(в текущей сборке `trim` не требует никаких файлов — работает из коробки)
