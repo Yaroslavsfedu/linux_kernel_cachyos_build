@@ -99,6 +99,18 @@ jobs:
           sed -i 's|!ccache|ccache|' /etc/makepkg.conf
           install -d -m 777 "$CCACHE_DIR"
 
+      - name: Import maintainer PGP keys into builder keyring
+        # makepkg проверяет подписи исходников от имени пользователя builder,
+        # а не root — ключи из pacman-key в его keyring не видны.
+        run: |
+          sudo -u builder mkdir -p /home/builder/.gnupg && sudo chmod 700 /home/builder/.gnupg
+          for KEY in E18447AC260021D31F3FF6C4C8A2A4774B8B63C4 \
+                     E8B9AA39F054E30E8290D492C3C4820857F654FE; do
+            sudo -u builder gpg --homedir /home/builder/.gnupg \
+                --keyserver hkps://keys.openpgp.org --recv-keys "$KEY" || true
+          done
+          sudo -u builder gpg --homedir /home/builder/.gnupg --list-keys || true
+
       - name: Patch PKGBUILDs for Zen 5 (znver5) support
         # Добавляет ветку ZEN5 в case "$MARCH" и запрещает CI переключать
         # сборку на -Os (иначе "оптимизация под 9600X" теряет смысл).
