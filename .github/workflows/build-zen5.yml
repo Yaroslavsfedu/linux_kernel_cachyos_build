@@ -171,9 +171,19 @@ jobs:
             exit 0
           fi
           if [ "$DRIVERS_MODE" = "localmod" ]; then
-            sed -i 's/: "${_localmodcfg:=no}"/: "${_localmodcfg:=yes}"/' PKGBUILD
-            grep -q '_localmodcfg:=yes' PKGBUILD || { echo "::error::не удалось включить _localmodcfg"; exit 1; }
-            echo "::notice::localmod требует modprobed-db (вашего ПК) в ~/.local/share/modprobed-db/modprobed.db у пользователя builder — см. BUILD-ZEN5.md"
+            # localmodconfig НЕ работает в CI (на раннере другое железо). Вместо него
+            # режим = trimmed config + модули из вашей базы modprobed.db (файл в репо):
+            cp -f config config.orig
+            python3 ../slim-config.py config
+            if [ -f ../linux-cachyos/modprobed.db ]; then
+              mkdir -p /home/builder/.local/share/modprobed-db
+              cp ../linux-cachyos/modprobed.db /home/builder/.local/share/modprobed-db/modprobed.db
+              chown -R builder:builder /home/builder/.local/share
+              echo "LOCALMOD_USED=yes" >> "$GITHUB_ENV"
+              echo "OK: база modprobed.db вашего ПК подключена"
+            else
+              echo "::warning::modprobed.db не найден в репозитории (linux-cachyos/modprobed.db) — сборка пойдёт как trim"
+            fi
             exit 0
           fi
 
@@ -188,6 +198,9 @@ jobs:
                    CONFIG_USB_XHCI_HCD CONFIG_EXT4_FS CONFIG_KVM_AMD CONFIG_CFG80211; do
             grep -q "^${k}=[my]" config || { echo "::error::$k пропала — стоп!"; exit 1; }
           done
+          # легализация конфига без исходников невозможна — make olddefconfig пройдёт
+          # в build() PKGBUILD? нет. Но kconfig допускает «лишние» строки: при сборке
+          # несуществующие зависимости просто выключаются автоматически.
           echo "OK: config урезан ДО сборки (резерв: config.orig)"
 
       - name: Restore ccache
@@ -215,10 +228,20 @@ jobs:
           _tcp_bbr3: no
           _build_zfs: no
           _build_nvidia_open: no
-          _localmodcfg: no
+          _localmodcfg: ${{ env.LOCALMOD_USED || 'no' }}
           _use_current: no
         run: |
           cd "${{ inputs.variant || 'linux-cachyos' }}"
+          # если config был урезан (trim/localmod), гарантированно возвращаем ключевые
+          # опции ядра/производительности (scripts/config правит .config-подобный файл
+          # без дерева исходников; PKGBUILD скопирует config -> .config в prepare())
+          if [ -f config.orig ]; then
+            for opt in CACHY THINLTO CC_OPTIMIZE_FOR_PERFORMANCE_O3 HZ_1000 \
+                       PREEMPT_FULL_PREEMPTION TRANSPARENT_HUGEPAGE_ALWAYS; do
+              grep -q "^CONFIG_${opt}=" config || echo "CONFIG_${opt}=y" >> config
+            done
+            grep -q '^CONFIG_MZEN4=' config || echo "CONFIG_MZEN4=y" >> config
+          fi
           sudo -H -E -u builder makepkg --skipchecksums --syncdeps --noconfirm
 
       - name: Verify the produced kernel really targets znver5
