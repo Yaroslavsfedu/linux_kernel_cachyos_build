@@ -18,6 +18,9 @@
 name: Build CachyOS kernel (Zen 5 / Ryzen 5 9600X)
 
 on:
+  push:
+    # Пустые коммиты с [ci skip] не запускают повторную сборку
+    paths-ignore: ['**.md']
   workflow_dispatch:
     inputs:
       variant:
