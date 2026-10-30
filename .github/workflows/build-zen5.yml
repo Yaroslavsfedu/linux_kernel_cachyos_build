@@ -67,23 +67,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free up disk space before build (remove unneeded VM tools)
-        # GitHub-раннер + Docker-контейнер содержат много мусора, который не нужен
-        # для сборки ядра. Удаляем его ДО makepkg, чтобы освободить максимум места
-        # (экономия ~15-20 ГБ) и избежать "No space left on device" при LTO-сборке.
-        run: |
-          echo "=== Disk usage BEFORE cleanup ==="
-          df -h / /mnt 2>/dev/null || true
-          sudo rm -rf /mnt/* || true                       # образы Windows/других ОС (~10+ ГБ)
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache || true
-          sudo rm -rf /usr/share/man /usr/share/doc /usr/share/gtk-doc || true
-          sudo apt-get purge -y -qq apache2 mysql-server* xserver-* xvfb libgl1-mesa-dri                firefox google-chrome-stable mono-complete powershell azure-cli                ansible *rpm *dotnet *aspnet llvm-* > /dev/null 2>&1 || true
-          sudo apt-get autoremove -y -qq purge > /dev/null 2>&1 || true
-          sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb /tmp/* || true
-          docker system prune -af > /dev/null 2>&1 || true # неиспользуемые образы/кэш docker
-          sudo rm -rf "$RUNNER_TEMP"/* || true
-          echo "=== Disk usage AFTER cleanup ==="
-          df -h / /mnt 2>/dev/null || true
+      - name: Maximize build disk space (remove unneeded VM tools before build)
+        # Экшен из GitHub Marketplace: JarvusInnovations/configlab-maximize-build-space
+        # ("Maximize build disk space"). Вычищает с раннера ненужные инструменты —
+        # образы ОС в /mnt, .NET/Android/GHC/CodeQL тулчейны, неиспользуемые
+        # docker-образы и кэш apt — освобождая до ~25+ ГБ под сборку ядра ThinLTO.
+        # continue-on-error: чистка не должна ломать сборку.
+        uses: JarvusInnovations/configlab-maximize-build-space@master
+        continue-on-error: true
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          overprovision-pxd-partition: 'false'
+
+      - name: Disk usage after cleanup
+        run: df -h / /mnt 2>/dev/null || true
 
       - name: Setup build environment (Arch + CachyOS repo, ccache, builder user)
         run: |
