@@ -236,14 +236,44 @@ jobs:
 
       - name: Verify the produced kernel really targets znver5
         run: |
-          pkg=$(ls "${{ inputs.variant || 'linux-cachyos' }}"/*.pkg.tar.zst | head -1)
+          set -euo pipefail
+          pkg=$(ls "${{ inputs.variant || 'linux-cachyos' }}"/linux-*.pkg.tar.zst | head -1)
           echo "Inspecting $pkg"
           tar -xOf "$pkg" '.PKGINFO' || true
-          # конфиг ядра внутри пакета: проверяем MZEN5/znver5 и отсутствие NATIVE
-          tar -xOf "$pkg" usr/lib/modules/*/config 2>/dev/null \
-            | grep -E 'CONFIG_MZEN5|CONFIG_X86_NATIVE_CPU|CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3|CONFIG_GENERIC_CPU=' || true
-          tar -xOf "$pkg" usr/lib/modules/*/config 2>/dev/null \
-            | grep -q 'CONFIG_MZEN5=y' && echo "OK: kernel built for Zen 5 (znver5)"
+
+          work=$(mktemp -d)
+          # извлекаем конфиг ядра из пакета (имя файла содержит версию -> глоб через tar)
+          tar -xOf "$pkg" --wildcards 'usr/lib/modules/*/config' > "$work/kconfig"
+          test -s "$work/kconfig"
+
+          echo "--- CPU tuning options found in the built kernel config ---"
+          grep -E '^CONFIG_(MZEN5|MZEN4|MZEN3|MZEN2|MK8|MCORE2|MATOM|MPSC|MARCH_ZNN4_VPCZ1|MVISASTEREX|MNOAVI|MCORE_AVX_NO_2|MPENTIUM_M|MPENTUM_4|MPENTPRO|MFATHOME|MX86_64|GENERIC_CPU|NATIVE_CPU64|X86_NATIVE_CPU|CC_OPTIMIZE_FOR_SIZE|CC_OPTIMIZE_FOR_PERFORMANCE|CC_OPTIMIZE_FOR_PERFORMANCE_O3)=' "$work/kconfig" || true
+
+          if grep -q '^CONFIG_MZEN5=y' "$work/kconfig"; then
+            echo "OK: kernel is built for Zen 5 (CONFIG_MZEN5=y -> -march=znver5 -mtune=znver5)"
+          else
+            echo "::error::CONFIG_MZEN5=y not found in the built kernel! The package was NOT optimized for Ryzen 5 9600X."
+            exit 1
+          fi
+
+          if grep -q '^CONFIG_CC_OPTIMIZE_FOR_SIZE=y' "$work/kconfig"; then
+            echo "::error::Kernel was built with -Os (size optimization) - CI fallback kicked in, perf flags lost!"
+            exit 1
+          fi
+
+          if grep -qE '^CONFIG_(X86_NATIVE_CPU|NATIVE_CPU64)=y' "$work/kconfig"; then
+            echo "::warning::Native-CPU tuning detected - the kernel may be tuned for the RUNNER's CPU, not yours!"
+          elif grep -q '^CONFIG_GENERIC_CPU=y' "$work/kconfig"; then
+            echo "::warning::Generic x86-64 tuning detected instead of znver5!"
+          fi
+
+          if grep -q '^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=y' "$work/kconfig"; then
+            echo "OK: -O3 optimization confirmed"
+          elif grep -q '^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y' "$work/kconfig"; then
+            echo "NOTE: standard -O2 optimization (expected for full/autofdo variants)"
+          fi
+
+          rm -rf "$work"
 
       - name: Upload packages as artifacts
         uses: actions/upload-artifact@v4
