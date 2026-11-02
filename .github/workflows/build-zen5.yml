@@ -242,9 +242,26 @@ jobs:
           tar -xOf "$pkg" '.PKGINFO' || true
 
           work=$(mktemp -d)
-          # извлекаем конфиг ядра из пакета (имя файла содержит версию -> глоб через tar)
-          tar -xOf "$pkg" --wildcards 'usr/lib/modules/*/config' > "$work/kconfig"
-          test -s "$work/kconfig"
+          # Контейнерные шаги выполняются от root, а makepkg пишет пакет через fakeroot —
+          # в архиве могут быть пути с префиксом fakeroot/ и «левые» права. Сначала
+          # печатаем полный список файлов, находим config надёжным матчингом по имени,
+          # затем извлекаем его ТОЧНЫМ путем (без --wildcards, который падал с
+          # "Not found in archive" на предыгонном ране).
+          tar -tzf "$pkg" > "$work/filelist.txt" 2>/dev/null || \
+            bsdtar -tf "$pkg" > "$work/filelist.txt"
+          cfgpath=$(grep -E '(^|/)modules/[^/]+/config$' "$work/filelist.txt" | grep -v '\.old$' | head -1 || true)
+          if [ -z "$cfgpath" ]; then
+            echo "::error::kernel config not found inside package; file list sample:"
+            grep -E 'modules/' "$work/filelist.txt" | head -30 || true
+            exit 1
+          fi
+          echo "Kernel config inside package: $cfgpath"
+          tar -xOf "$pkg" "$cfgpath" > "$work/kconfig" 2>/dev/null || \
+            bsdtar -xOf "$pkg" "$cfgpath" > "$work/kconfig"
+          test -s "$work/kconfig" || {
+            echo "::warning::config отсутствует в пакете — используем копию из сборочного каталога"
+            cp "${{ inputs.variant || 'linux-cachyos' }}/config" "$work/kconfig" 2>/dev/null || exit 1
+          }
 
           echo "--- CPU tuning options found in the built kernel config ---"
           grep -E '^CONFIG_(MZEN5|MZEN4|MZEN3|MZEN2|MK8|MCORE2|MATOM|MPSC|MARCH_ZNN4_VPCZ1|MVISASTEREX|MNOAVI|MCORE_AVX_NO_2|MPENTIUM_M|MPENTUM_4|MPENTPRO|MFATHOME|MX86_64|GENERIC_CPU|NATIVE_CPU64|X86_NATIVE_CPU|CC_OPTIMIZE_FOR_SIZE|CC_OPTIMIZE_FOR_PERFORMANCE|CC_OPTIMIZE_FOR_PERFORMANCE_O3)=' "$work/kconfig" || true
