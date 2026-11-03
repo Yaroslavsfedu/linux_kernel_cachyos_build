@@ -115,7 +115,7 @@ jobs:
           chmod -R a+rw .
 
           sed -i 's/#MAKEFLAGS="-j2"/MAKEFLAGS="-j$(nproc) -l$(nproc)"/g' /etc/makepkg.conf
-          sed -i 's|#PACKAGER=".*"|PACKAGER="GitHub Actions (Zen5 CI)"|g' /etc/makepkg.conf
+          sed -i 's|#PACKAGER=".*"|PACKAGER="GitHub Actions (Zen5 CI) \<zen5ci@users.noreply.github.com\>"|g' /etc/makepkg.conf
           sed -i 's|!ccache|ccache|' /etc/makepkg.conf
           install -d -m 777 "$CCACHE_DIR"
 
@@ -134,6 +134,8 @@ jobs:
       - name: Checkout kernel PKGBUILDs (форк Yaroslavsfedu/linux-cachyos)
         run: |
           git clone --depth 1 "$PKGS_REPO" pkgs
+          # клон идёт от root, а makepkg пишет от builder — открыть права
+          chmod -R a+rwX pkgs
           variant="${{ inputs.variant || 'linux-cachyos' }}"
           if [ ! -f "pkgs/$variant/PKGBUILD" ]; then
             echo "::error::В форке нет варианта pkgs/$variant (репо $PKGS_REPO)"
