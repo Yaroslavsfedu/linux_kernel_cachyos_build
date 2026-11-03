@@ -5,10 +5,14 @@
 # жёстко ставится _processor_opt=zen5 (CONFIG_MZEN5 -> -march=znver5).
 #
 # Автономная схема:
-#   этот репозиторий  = только сборщик (workflow, zen5-patches.sh);
+#   этот репозиторий  = только сборщик (workflow, zen5-patches.sh, branch-source.sh);
 #   PKGBUILD + config = клонируются из форка Yaroslavsfedu/linux-cachyos;
-#   tarball исходников= из релиза того же форка (зеркало CachyOS/linux;
-#                       создать/обновить: ./mirror-release.sh cachyos-X.Y.Z-N в форке).
+#   tarball исходников= РЕЖИМ branch (по умолчанию): git-archive снапшот tip'а ветки
+#                       форка Yaroslavsfedu/linux (по умолчанию 7.3/cachy) — только
+#                       файлы, без истории. РЕЖИМ release: релиз форка
+#                       (зеркало CachyOS/linux; создать/обновить:
+#                       ./mirror-release.sh cachyos-X.Y.Z-N в форке), fallback
+#                       на релиз CachyOS/linux.
 #
 # Результат: артефакт *.pkg.tar.zst -> sudo pacman -U ...
 # ============================================================================
@@ -49,6 +53,17 @@ on:
         default: '1000'
         type: choice
         options: ['1000', '750', '600', '500', '300', '250', '100']
+      source_mode:
+        description: 'Куда идти за исходниками ядра'
+        required: true
+        default: 'branch'
+        type: choice
+        options: [branch, release]
+      kernel_branch:
+        description: 'Ветка форка Yaroslavsfedu/linux (режим source_mode=branch)'
+        required: false
+        default: '7.3/cachy'
+        type: string
 env:
   CCACHE_DIR: /home/builder/.ccache
   PKGS_REPO: https://github.com/Yaroslavsfedu/linux-cachyos.git
@@ -140,9 +155,21 @@ jobs:
           chmod +x zen5-patches.sh
           ./zen5-patches.sh pkgs
 
-      # Источники ядра: сначала релиз форка, если тарбалла там ещё нет —
+      # Режим branch (по умолчанию): исходники ядра = git-archive снапшот tip'а
+      # ветки форка Yaroslavsfedu/linux — только файлы, без истории и релизов.
+      # Подпись и b2sum релиза на подвижный снапшот не рассчитаны —
+      # makepkg в CI и так вызывается с --skipchecksums.
+      - name: Kernel source = fork branch snapshot (git archive, no history)
+        if: ${{ (inputs.source_mode || 'branch') == 'branch' }}
+        run: |
+          export LINUX_BRANCH="${{ inputs.kernel_branch || '7.3/cachy' }}"
+          chmod +x branch-source.sh
+          ./branch-source.sh "pkgs/${{ inputs.variant || 'linux-cachyos' }}"
+
+      # Режим release: релиз форка, если тарбалла там ещё нет —
       # релиз CachyOS/linux под ВЕРСИЮ PKGBUILD (тег _srcname), а не "последний какой есть".
       - name: Kernel source URL check (fork release -> CachyOS fallback)
+        if: ${{ (inputs.source_mode || 'branch') == 'release' }}
         run: |
           dir="pkgs/${{ inputs.variant || 'linux-cachyos' }}"
           cd "$dir"
