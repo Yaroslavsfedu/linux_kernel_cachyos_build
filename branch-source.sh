@@ -30,16 +30,26 @@ KERNEL_REPO="${FORK_KERNEL_REPO:-linux}"
 
 cd "$DIR"
 
+echo "[branch-source] dir=$(pwd) branch=$BRANCH repo=${OWNER}/${KERNEL_REPO}"
+
 if ! grep -qF 'releases/download' PKGBUILD; then
     echo "[branch-source] source() уже не ссылается на релизный tarball — нечего делать"
     exit 0
 fi
 
-_srcname="$(source ./PKGBUILD 2>/dev/null; printf '%s' "${_srcname:-}")"
-test -n "$_srcname" || {
-    echo "[branch-source] ERROR: не удалось прочитать _srcname из PKGBUILD" >&2
+# ВАЖНО: source ./PKGBUILD выполняется в ЧИСТОМ bash (bash -c) — наш скрипт
+# работает под set -euo pipefail, а PKGBUILD рассчитан на окружение makepkg:
+# его дефолты разворачивают необязательные переменные среды
+# (: "${_localmodcfg_path:="$XDG_DATA_HOME/..."}") и под set -u в CI это
+# падение "unbound variable". В новом процессе опции -e/-u не наследуются,
+# и source проходит так же, как у makepkg.
+_srcname="$(bash -c 'source ./PKGBUILD >/dev/null 2>&1 && printf %s "${_srcname:-}"' || true)"
+if [ -z "$_srcname" ]; then
+    echo "[branch-source] ERROR: не удалось прочитать _srcname из PKGBUILD; проверь PKGBUILD построчно ниже" >&2
+    sed -n '1,40p' PKGBUILD >&2
     exit 1
-}
+fi
+echo "[branch-source] _srcname=${_srcname}"
 
 snapshot="https://codeload.github.com/${OWNER}/${KERNEL_REPO}/tar.gz/refs/heads/${BRANCH}"
 echo "[branch-source] Качаю снапшот ветки ${BRANCH} из ${OWNER}/${KERNEL_REPO}: ${snapshot}"
