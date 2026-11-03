@@ -23,6 +23,8 @@ Ryzen 5 9600X — это микроархитектура **Zen 5**, для GCC 
    (`https://github.com/Yaroslavsfedu/linux-cachyos/releases/tag/cachyos-7.3.1-1`).
    Это зеркало tarball'а `CachyOS/linux`: байты идентичны, поэтому PGP-подписи
    мейнтейнеров CachyOS и b2sums остаются валидны.
+   Если релиза у форка ещё нет — workflow автоматически откатывается на релиз
+   `CachyOS/linux` под версию, зашитую в PKGBUILD.
 
 ### Создать/обновить зеркало исходников (при выходе новой версии ядра)
 
