@@ -52,7 +52,6 @@ PREFIXES = [
     'SMART2', 'SMART3', 'AACRAID', 'PM8001', 'PMATE', 'ADPT', 'IPR',
     'IPS', 'AIC79', 'AIC7XXX', 'DC395', 'DC390T', 'SYM53', 'NCR53C',
     'QLOGIC', 'CACHEFS', 'CPQARRA',
-    'ZZ_SKIP1',
     'SCSI_FC', 'SCSI_QLA', 'SCSI_LPFC', 'SCSI_CXGB4_ISCSI',
     'SCSI_MPT', 'SCSI_SMART', 'SCSI_IPR', 'SCSI_ADV',
     # ---- eMMC/UFS/SDIO/Memstick host-контроллеры (десктоп: NVMe/SATA/USB) ----
@@ -65,10 +64,9 @@ PREFIXES = [
     'UFS_FS', 'OMFS_FS', 'MINIX_FS', 'SYSV_FS', 'ISDFS', 'AFFS',
     'ECRYPT_FS', 'DRBD', 'DLM', 'NILFS2', 'REISERFS', 'JFS_FS',
     'HFS_FS', 'HFSPLUS_FS', 'CRAMFS', 'PSTORE_BLK', 'ROMFS',
-    'ZZ_SKIP2',
     # ---- CAN / hamradio / WPAN / NFC / IRDA / телефония ----
     'CAN_', 'HAMRADIO', 'AX25', 'IEEE802154', 'NFC', 'IRDA', 'PHONET',
-    'CAIF', 'RXKAD', 'WWROCCO', 'ZZ_SKIP3',
+    'CAIF', 'RXKAD', 'WWROCCO',
     # ---- PHY-драйверы медленных сегментных сетей (desktop Ethernet = R8169/I226) ----
     'MARVELL_10G_PHY', 'MICROSEMI_PHY', 'BROADCOM_PHY', 'ICPLUS_PHY',
     'MICREL_PHY', 'NXP_CBTX_PHY', 'XILINX_PHY', 'STE100XP', 'FIXED_PHY',
@@ -129,9 +127,8 @@ PREFIXES = [
 # точечные опции (точные имена)
 OPTIONS = [
     'HYPERVISOR_GUEST', 'KVM_GUEST', 'PARAVIRT', 'PARAVIRT_SPINLOCKS',
-    'X86_XEN', 'COMEDI', 'ZZ_SKIP4',
+    'X86_XEN',
 ]
-OPTIONS = [o for o in OPTIONS if not o.startswith('ZZ_') and '?' not in o]
 
 # очистим список от случайного мусора (защита от опечаток при генерации)
 PREFIXES = [p for p in PREFIXES if re.fullmatch(r'[A-Z0-9_]+', p)]

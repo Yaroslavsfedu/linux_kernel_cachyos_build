@@ -1,34 +1,30 @@
 # ============================================================================
-# Сборка ядра linux-cachyos с оптимизацией под AMD Ryzen 5 9600X (Zen 5 / znver5)
-# на сервере GitHub Actions.
+# Сборка ядра linux-cachyos под AMD Ryzen 5 9600X (Zen 5 / znver5) на GitHub Actions.
 #
-# ГЛАВНОЕ: процессор сборочного раннера НЕ используется для автоопределения!
-#   NATIVE/x86-native-cpu ЗАПРЕЩЁН — вместо него жёстко выставляется
-#   _processor_opt=zen5 (CONFIG_MZEN5 -> -march=znver5/-mtune=znver5).
-#   Ядро, собранное на серверном Xeon/EPYC, будет использовать все инструкции
-#   Zen 5 (AVX-512 и т.д.) на вашем 9600X.
+# CPU сборочного раннера НЕ используется для автоопределения: NATIVE запрещён,
+# жёстко ставится _processor_opt=zen5 (CONFIG_MZEN5 -> -march=znver5).
 #
-# Как пользоваться:
-#   1. Форкните https://github.com/CachyOS/linux-cachyos ИЛИ скопируйте папки
-#      linux-cachyos-* в корень этого репозитория.
-#   2. Push в main / запуск через Actions -> "Build CachyOS kernel (Zen 5)".
-#   3. Скачайте артефакт *.pkg.tar.zst и установите:
-#        sudo pacman -U linux-cachyos-cachyos-*.pkg.tar.zst
+# Автономная схема:
+#   этот репозиторий  = только сборщик (workflow, slim-config.py, zen5-patches.sh);
+#   PKGBUILD + config = клонируются из форка Yaroslavsfedu/linux-cachyos;
+#   tarball исходников= из релиза того же форка (зеркало CachyOS/linux;
+#                       создать/обновить: ./mirror-release.sh cachyos-X.Y.Z-N в форке).
+#
+# Результат: артефакт *.pkg.tar.zst -> sudo pacman -U ...
 # ============================================================================
 name: Build CachyOS kernel (Zen 5 / Ryzen 5 9600X)
 
 on:
   push:
-    # Пустые коммиты с [ci skip] не запускают повторную сборку
     paths-ignore: ['**.md']
   workflow_dispatch:
     inputs:
       variant:
-        description: 'Вариант ядра (папка в репозитории)'
+        description: 'Вариант ядра (папка в форке Yaroslavsfedu/linux-cachyos)'
         required: true
         default: 'linux-cachyos'
         type: choice
-        options: [linux-cachyos, linux-cachyos-bore, linux-cachyos-eevdf, linux-cachyos-bmq, linux-cachyos-server, linux-cachyos-lts]
+        options: [linux-cachyos, linux-cachyos-bore, linux-cachyos-eevdf, linux-cachyos-bmq, linux-cachyos-hardened, linux-cachyos-lts, linux-cachyos-rc, linux-cachyos-rt-bore, linux-cachyos-server, linux-cachyos-deckify]
       processor_opt:
         description: 'Оптимизация компилятора под CPU'
         required: true
@@ -53,9 +49,9 @@ on:
         default: 'trim'
         type: choice
         options:
-          - trim   # быстрый серверный cutdown (~20-30 мин сборки вместо ~2 ч)
-          - full   # полный дистрибутивный конфиг (все 15500+ модулей)
-          - localmod # ТОЧНО под ваше железо: modprobed.db из вашего ПК (см. BUILD-ZEN5.md)
+          - trim     # cutdown ~1750 лишних опций до компиляции (slim-config.py)
+          - full     # полный дистрибутивный конфиг (~15500 модулей)
+          - localmod # ровно под ваше железо: modprobed.db в корне этого репо
       hz:
         description: 'Tick rate (HZ)'
         required: true
@@ -64,39 +60,32 @@ on:
         options: ['1000', '750', '600', '500', '300', '250', '100']
 env:
   CCACHE_DIR: /home/builder/.ccache
+  PKGS_REPO: https://github.com/Yaroslavsfedu/linux-cachyos.git
 
 jobs:
   build:
     name: ${{ inputs.variant || 'linux-cachyos' }} (${{ inputs.processor_opt || 'zen5' }})
     runs-on: ubuntu-24.04
     container:
-      # Правильный путь на Docker Hub: репозиторий archlinux/archlinux, тег base-devel
       image: archlinux/archlinux:base-devel
     steps:
-      - name: Checkout
+      - name: Checkout (этот репозиторий сборщика)
         uses: actions/checkout@v4
 
-      - name: Maximize build disk space (remove unneeded VM tools before build)
-        # Экшен из GitHub Marketplace "Maximize build disk space". ЧИСТИТ ХОСТОВУЮ
-        # VM раннера: удаляет ненужные инструменты (.NET/Android/GHC/CodeQL
-        # тулчейны, образы ОС в /mnt, неиспользуемые docker-образы, кэш apt) —
-        # освобождает до ~25+ ГБ под сборку ядра с ThinLTO. Требует sudo+docker на
-        # хосте, поэтому вызывается через run: wrapper (action-in-container ломал
-        # "Set up job"). continue-on-error — чистка никогда не валит сборку.
+      # Чистит хостовую VM раннера (тулчейны .NET/Android/GHC, образы в /mnt,
+      # docker-образы, apt-кэш): +~25 ГБ под сборку с ThinLTO. Требует sudo+docker
+      # на хосте, поэтому run-обёртка; не валит сборку никогда.
+      - name: Maximize build disk space
         continue-on-error: true
         run: |
           echo "=== Disk BEFORE ==="; df -h / /mnt 2>/dev/null || true
           set +e
-          # /mnt: образы Windows Server (~10+ ГБ)
           sudo rm -rf /mnt/image* /mnt/data* 2>/dev/null
-          # ненужные тулчейны сред разработки
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                        /opt/hostedtoolcache/CodeQL /usr/local/share/powershell 2>/dev/null
-          # неиспользуемые docker-образы и buildx-кэш (кроме нужного arch)
           sudo docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
             | grep -v '^archlinux/archlinux' | while read img; do sudo docker rmi -f "$img" 2>/dev/null; done
           sudo docker builder prune -af 2>/dev/null
-          # кэш apt + man/doc
           sudo rm -rf /var/lib/apt/lists/* /usr/share/man /usr/share/doc 2>/dev/null
           set -e
           echo "=== Disk AFTER ==="; df -h / /mnt 2>/dev/null || true
@@ -110,10 +99,8 @@ jobs:
 
           pacman-key --init
           pacman-key --populate archlinux
-          # Ключ репозитория CachyOS (для pacman -Syu) + ключи мейнтейнеров ядра,
-          # которыми подписаны tar.gz-исходники в PKGBUILD (validpgpkeys).
-          # Берём с hkps://keys.openpgp.org — keyserver.ubuntu.com часто недоступен
-          # из контейнеров GitHub Actions (падало на 11371).
+          # Ключ репозитория CachyOS (pacman -Syu) + ключи мейнтейнеров ядра,
+          # которыми подписан tar.gz (validpgpkeys PKGBUILD).
           for KEY in F3B607488DB35A47 \
                      E18447AC260021D31F3FF6C4C8A2A4774B8B63C4 \
                      E8B9AA39F054E30E8290D492C3C4820857F654FE; do
@@ -127,15 +114,14 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           chmod -R a+rw .
 
-          # Все ядра сборки
           sed -i 's/#MAKEFLAGS="-j2"/MAKEFLAGS="-j$(nproc) -l$(nproc)"/g' /etc/makepkg.conf
           sed -i 's|#PACKAGER=".*"|PACKAGER="GitHub Actions (Zen5 CI)"|g' /etc/makepkg.conf
           sed -i 's|!ccache|ccache|' /etc/makepkg.conf
           install -d -m 777 "$CCACHE_DIR"
 
+      # makepkg проверяет подписи исходников от имени builder, а не root —
+      # ключи из pacman-key в его keyring не видны.
       - name: Import maintainer PGP keys into builder keyring
-        # makepkg проверяет подписи исходников от имени пользователя builder,
-        # а не root — ключи из pacman-key в его keyring не видны.
         run: |
           sudo -u builder mkdir -p /home/builder/.gnupg && sudo chmod 700 /home/builder/.gnupg
           for KEY in E18447AC260021D31F3FF6C4C8A2A4774B8B63C4 \
@@ -145,62 +131,63 @@ jobs:
           done
           sudo -u builder gpg --homedir /home/builder/.gnupg --list-keys || true
 
+      - name: Checkout kernel PKGBUILDs (форк Yaroslavsfedu/linux-cachyos)
+        run: |
+          git clone --depth 1 "$PKGS_REPO" pkgs
+          variant="${{ inputs.variant || 'linux-cachyos' }}"
+          if [ ! -f "pkgs/$variant/PKGBUILD" ]; then
+            echo "::error::В форке нет варианта pkgs/$variant (репо $PKGS_REPO)"
+            ls pkgs
+            exit 1
+          fi
+          echo "== PKGBUILD: $variant =="
+
       - name: Patch PKGBUILDs for Zen 5 (znver5) support
-        # Добавляет ветку ZEN5 в case "$MARCH" и запрещает CI переключать
-        # сборку на -Os (иначе "оптимизация под 9600X" теряет смысл).
         run: |
           chmod +x zen5-patches.sh
-          ./zen5-patches.sh .
+          ./zen5-patches.sh pkgs
 
+      # Драйверы режутся ДО компиляции: make не строит то, чего нет в конфиге.
+      #   trim     — slim-config.py (desktop-cutdown, ~1750 опций выключено)
+      #   full     — конфиг не трогаем
+      #   localmod — slim-config + модули из modprobed.db вашего ПК (в корне этого репо)
       - name: Slim kernel config (cut unused drivers BEFORE build)
-        # ДРАЙВЕРЫ РЕЖУТСЯ ДО КОМПИЛЯЦИИ — make не строит то, чего нет в конфиге.
-        # Экономит и ВРЕМЯ (~2ч -> меньше), и МЕСТО на диске раннера.
-        #   trim     = desktop-cutdown slim-config.py: VM/серверные NIC/RAID/FC/eMMC/
-        #              NVDIMM/кластерные ФС/CAN-NFC-IIO/SPI-MFD/SoC-GPU/FB-legacy/
-        #              sound-SoC/Wi-Fi-old — ~1750 опций выключено
-        #   full     = ничего не трогаем (полный дистрибутивный конфиг, ~15500 модулей)
-        #   localmod = ТОЧНО под ваше железо: modprobed.db вашего ПК + _localmodcfg=yes
         env:
           DRIVERS_MODE: ${{ inputs.drivers_mode || 'trim' }}
         run: |
           set -e
-          cd "${{ inputs.variant || 'linux-cachyos' }}"
+          dir="pkgs/${{ inputs.variant || 'linux-cachyos' }}"
+          cd "$dir"
 
           if [ "$DRIVERS_MODE" = "full" ]; then
             echo "drivers_mode=full: config не трогаем"
             exit 0
           fi
+          cp -f config config.orig
+          python3 "$GITHUB_WORKSPACE/slim-config.py" config
+          before=$(grep -cE '^CONFIG_[A-Z0-9_]+=[my]' config.orig)
+          after=$(grep -cE '^CONFIG_[A-Z0-9_]+=[my]' config)
+          echo "Включённых (=y/=m) было: $before, стало: $after"
+
           if [ "$DRIVERS_MODE" = "localmod" ]; then
-            # localmodconfig НЕ работает в CI (на раннере другое железо). Вместо него
-            # режим = trimmed config + модули из вашей базы modprobed.db (файл в репо):
-            cp -f config config.orig
-            python3 ../slim-config.py config
-            if [ -f ../linux-cachyos/modprobed.db ]; then
+            # localmodconfig по modprobed.db из корня этого репозитория
+            if [ -f "$GITHUB_WORKSPACE/modprobed.db" ]; then
               mkdir -p /home/builder/.local/share/modprobed-db
-              cp ../linux-cachyos/modprobed.db /home/builder/.local/share/modprobed-db/modprobed.db
+              cp "$GITHUB_WORKSPACE/modprobed.db" /home/builder/.local/share/modprobed-db/modprobed.db
               chown -R builder:builder /home/builder/.local/share
               echo "LOCALMOD_USED=yes" >> "$GITHUB_ENV"
-              echo "OK: база modprobed.db вашего ПК подключена"
+              echo "OK: modprobed.db подключён"
             else
-              echo "::warning::modprobed.db не найден в репозитории (linux-cachyos/modprobed.db) — сборка пойдёт как trim"
+              echo "::warning::modprobed.db нет в корне репозитория сборки — localmod работает как trim"
             fi
             exit 0
           fi
 
-          # --- trim: точечное отключение лишних классов драйверов ---
-          cp -f config config.orig
-          python3 ../slim-config.py config
-          before=$(grep -cE '^CONFIG_[A-Z0-9_]+=[my]' config.orig)
-          after=$(grep -cE '^CONFIG_[A-Z0-9_]+=[my]' config)
-          echo "Включённых (=y/=m) было: $before, стало: $after"
-          # страховка: ключевые для Ryzen-десктопа опции обязаны остаться
+          # trim: страховка — ключевые для Ryzen-десктопа опции обязаны остаться
           for k in CONFIG_DRM_AMDGPU CONFIG_DRM_I915 CONFIG_SND_HDA_INTEL \
                    CONFIG_USB_XHCI_HCD CONFIG_EXT4_FS CONFIG_KVM_AMD CONFIG_CFG80211; do
             grep -q "^${k}=[my]" config || { echo "::error::$k пропала — стоп!"; exit 1; }
           done
-          # легализация конфига без исходников невозможна — make olddefconfig пройдёт
-          # в build() PKGBUILD? нет. Но kconfig допускает «лишние» строки: при сборке
-          # несуществующие зависимости просто выключаются автоматически.
           echo "OK: config урезан ДО сборки (резерв: config.orig)"
 
       - name: Restore ccache
@@ -211,19 +198,18 @@ jobs:
           restore-keys: |
             ccache-${{ inputs.variant || 'linux-cachyos' }}-${{ inputs.llvm_lto || 'thin' }}
 
+      # КЛЮЧЕВОЕ: целевой CPU = Zen 5 (CONFIG_MZEN5 -> -march=znver5), а не CPU раннера
       - name: Build kernel package (optimized for Ryzen 5 9600X / znver5)
         env:
-          # ---- КЛЮЧЕВОЕ: целевой CPU = Zen 5, а НЕ CPU раннера -------------
-          # zen5 -> CONFIG_MZEN5 -> -march=znver5 -mtune=znver5 (GCC>=14/Clang>=18)
           _processor_opt: ${{ inputs.processor_opt || 'zen5' }}
-          _cachy_config: yes          # Cachy OS tuning (sched/tunable tweaks)
-          _cpusched: ${{ inputs.cpusched || 'cachyos' }}   # cachyos = EEVDF+BORE-альтернатива по умолчанию
-          _use_llvm_lto: ${{ inputs.llvm_lto || 'thin' }}  # thin LTO через clang/lld
-          _cc_harder: yes             # KBUILD_CFLAGS -O3
+          _cachy_config: yes
+          _cpusched: ${{ inputs.cpusched || 'cachyos' }}
+          _use_llvm_lto: ${{ inputs.llvm_lto || 'thin' }}
+          _cc_harder: yes
           _HZ_ticks: ${{ inputs.hz || '1000' }}
           _tickrate: full
           _preempt: full
-          _hugepage: always           # THP always — хорошо для desktop Zen5
+          _hugepage: always
           _per_gov: no
           _tcp_bbr3: no
           _build_zfs: no
@@ -231,45 +217,51 @@ jobs:
           _localmodcfg: ${{ env.LOCALMOD_USED || 'no' }}
           _use_current: no
         run: |
-          cd "${{ inputs.variant || 'linux-cachyos' }}"
+          cd "pkgs/${{ inputs.variant || 'linux-cachyos' }}"
           sudo -H -E -u builder makepkg --skipchecksums --syncdeps --noconfirm
 
+      # PKGBUILD (форк) кладёт итоговый .config в usr/lib/modules/<ver>/config;
+      # извлекаем его точным путём (без --wildcards — падал на реальном пакете)
+      # и проверяем, что ядро собрано под znver5, а не под -Os/generic/native.
       - name: Verify the produced kernel really targets znver5
         run: |
           set -euo pipefail
-          pkg=$(ls "${{ inputs.variant || 'linux-cachyos' }}"/linux-*.pkg.tar.zst | head -1)
+          dir="pkgs/${{ inputs.variant || 'linux-cachyos' }}"
+          pkg=$(ls "$dir"/linux-*.pkg.tar.zst | head -1)
           echo "Inspecting $pkg"
           tar -xOf "$pkg" '.PKGINFO' || true
 
           work=$(mktemp -d)
-          # Контейнерные шаги выполняются от root, а makepkg пишет пакет через fakeroot —
-          # в архиве могут быть пути с префиксом fakeroot/ и «левые» права. Сначала
-          # печатаем полный список файлов, находим config надёжным матчингом по имени,
-          # затем извлекаем его ТОЧНЫМ путем (без --wildcards, который падал с
-          # "Not found in archive" на предыгонном ране).
           tar -tzf "$pkg" > "$work/filelist.txt" 2>/dev/null || \
             bsdtar -tf "$pkg" > "$work/filelist.txt"
-          cfgpath=$(grep -E '(^|/)modules/[^/]+/config$' "$work/filelist.txt" | grep -v '\.old$' | head -1 || true)
-          if [ -z "$cfgpath" ]; then
-            echo "::error::kernel config not found inside package; file list sample:"
+          cfgpath=$(grep -E '(^|/)modules/[^/]+/config$' "$work/filelist.txt" \
+                    | grep -v '\.old$' | head -1 || true)
+          if [ -n "$cfgpath" ]; then
+            echo "Kernel config inside package: $cfgpath"
+            tar -xOf "$pkg" "$cfgpath" > "$work/kconfig" 2>/dev/null || \
+              bsdtar -xOf "$pkg" "$cfgpath" > "$work/kconfig" || true
+          fi
+          # Резерв: .config этой же сборки из srcdir (после makepkg сохраняется)
+          if [ ! -s "$work/kconfig" ]; then
+            srccfg=$(find "$dir" -maxdepth 3 -path '*/src/*/.config' -print -quit || true)
+            if [ -n "$srccfg" ]; then
+              echo "::warning::config отсутствует в пакете — беру .config из srcdir: $srccfg"
+              cp "$srccfg" "$work/kconfig"
+            fi
+          fi
+          test -s "$work/kconfig" || {
+            echo "::error::kernel config не найден ни в пакете, ни в srcdir; sample file list:"
             grep -E 'modules/' "$work/filelist.txt" | head -30 || true
             exit 1
-          fi
-          echo "Kernel config inside package: $cfgpath"
-          tar -xOf "$pkg" "$cfgpath" > "$work/kconfig" 2>/dev/null || \
-            bsdtar -xOf "$pkg" "$cfgpath" > "$work/kconfig"
-          test -s "$work/kconfig" || {
-            echo "::warning::config отсутствует в пакете — используем копию из сборочного каталога"
-            cp "${{ inputs.variant || 'linux-cachyos' }}/config" "$work/kconfig" 2>/dev/null || exit 1
           }
 
-          echo "--- CPU tuning options found in the built kernel config ---"
+          echo "--- CPU tuning options in the built kernel config ---"
           grep -E '^CONFIG_(MZEN5|MZEN4|MZEN3|MZEN2|MK8|MCORE2|MATOM|MPSC|MARCH_ZNN4_VPCZ1|MVISASTEREX|MNOAVI|MCORE_AVX_NO_2|MPENTIUM_M|MPENTUM_4|MPENTPRO|MFATHOME|MX86_64|GENERIC_CPU|NATIVE_CPU64|X86_NATIVE_CPU|CC_OPTIMIZE_FOR_SIZE|CC_OPTIMIZE_FOR_PERFORMANCE|CC_OPTIMIZE_FOR_PERFORMANCE_O3)=' "$work/kconfig" || true
 
           if grep -q '^CONFIG_MZEN5=y' "$work/kconfig"; then
             echo "OK: kernel is built for Zen 5 (CONFIG_MZEN5=y -> -march=znver5 -mtune=znver5)"
           else
-            echo "::error::CONFIG_MZEN5=y not found in the built kernel! The package was NOT optimized for Ryzen 5 9600X."
+            echo "::error::CONFIG_MZEN5=y not found! The package was NOT optimized for Ryzen 5 9600X."
             exit 1
           fi
 
@@ -297,7 +289,7 @@ jobs:
         with:
           name: linux-cachyos-zen5-${{ inputs.llvm_lto || 'thin' }}
           path: |
-            ${{ inputs.variant || 'linux-cachyos' }}/*.pkg.tar.zst
-            ${{ inputs.variant || 'linux-cachyos' }}/*.pkg.tar.zst.sig
+            pkgs/${{ inputs.variant || 'linux-cachyos' }}/*.pkg.tar.zst
+            pkgs/${{ inputs.variant || 'linux-cachyos' }}/*.pkg.tar.zst.sig
           if-no-files-found: error
           retention-days: 14
