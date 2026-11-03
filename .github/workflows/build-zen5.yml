@@ -5,7 +5,7 @@
 # жёстко ставится _processor_opt=zen5 (CONFIG_MZEN5 -> -march=znver5).
 #
 # Автономная схема:
-#   этот репозиторий  = только сборщик (workflow, slim-config.py, zen5-patches.sh);
+#   этот репозиторий  = только сборщик (workflow, zen5-patches.sh);
 #   PKGBUILD + config = клонируются из форка Yaroslavsfedu/linux-cachyos;
 #   tarball исходников= из релиза того же форка (зеркало CachyOS/linux;
 #                       создать/обновить: ./mirror-release.sh cachyos-X.Y.Z-N в форке).
@@ -43,15 +43,6 @@ on:
         default: 'cachyos'
         type: choice
         options: [cachyos, bore, eevdf, bmq]
-      drivers_mode:
-        description: 'Количество драйверов в ядре'
-        required: true
-        default: 'trim'
-        type: choice
-        options:
-          - trim     # cutdown ~1750 лишних опций до компиляции (slim-config.py)
-          - full     # полный дистрибутивный конфиг (~15500 модулей)
-          - localmod # ровно под ваше железо: modprobed.db в корне этого репо
       hz:
         description: 'Tick rate (HZ)'
         required: true
@@ -149,49 +140,6 @@ jobs:
           chmod +x zen5-patches.sh
           ./zen5-patches.sh pkgs
 
-      # Драйверы режутся ДО компиляции: make не строит то, чего нет в конфиге.
-      #   trim     — slim-config.py (desktop-cutdown, ~1750 опций выключено)
-      #   full     — конфиг не трогаем
-      #   localmod — slim-config + модули из modprobed.db вашего ПК (в корне этого репо)
-      - name: Slim kernel config (cut unused drivers BEFORE build)
-        env:
-          DRIVERS_MODE: ${{ inputs.drivers_mode || 'trim' }}
-        run: |
-          set -e
-          dir="pkgs/${{ inputs.variant || 'linux-cachyos' }}"
-          cd "$dir"
-
-          if [ "$DRIVERS_MODE" = "full" ]; then
-            echo "drivers_mode=full: config не трогаем"
-            exit 0
-          fi
-          cp -f config config.orig
-          python3 "$GITHUB_WORKSPACE/slim-config.py" config
-          before=$(grep -cE '^CONFIG_[A-Z0-9_]+=[my]' config.orig)
-          after=$(grep -cE '^CONFIG_[A-Z0-9_]+=[my]' config)
-          echo "Включённых (=y/=m) было: $before, стало: $after"
-
-          if [ "$DRIVERS_MODE" = "localmod" ]; then
-            # localmodconfig по modprobed.db из корня этого репозитория
-            if [ -f "$GITHUB_WORKSPACE/modprobed.db" ]; then
-              mkdir -p /home/builder/.local/share/modprobed-db
-              cp "$GITHUB_WORKSPACE/modprobed.db" /home/builder/.local/share/modprobed-db/modprobed.db
-              chown -R builder:builder /home/builder/.local/share
-              echo "LOCALMOD_USED=yes" >> "$GITHUB_ENV"
-              echo "OK: modprobed.db подключён"
-            else
-              echo "::warning::modprobed.db нет в корне репозитория сборки — localmod работает как trim"
-            fi
-            exit 0
-          fi
-
-          # trim: страховка — ключевые для Ryzen-десктопа опции обязаны остаться
-          for k in CONFIG_DRM_AMDGPU CONFIG_DRM_I915 CONFIG_SND_HDA_INTEL \
-                   CONFIG_USB_XHCI_HCD CONFIG_EXT4_FS CONFIG_KVM_AMD CONFIG_CFG80211; do
-            grep -q "^${k}=[my]" config || { echo "::error::$k пропала — стоп!"; exit 1; }
-          done
-          echo "OK: config урезан ДО сборки (резерв: config.orig)"
-
       - name: Restore ccache
         uses: actions/cache@v4
         with:
@@ -216,7 +164,7 @@ jobs:
           _tcp_bbr3: no
           _build_zfs: no
           _build_nvidia_open: no
-          _localmodcfg: ${{ env.LOCALMOD_USED || 'no' }}
+          _localmodcfg: no
           _use_current: no
         run: |
           cd "pkgs/${{ inputs.variant || 'linux-cachyos' }}"

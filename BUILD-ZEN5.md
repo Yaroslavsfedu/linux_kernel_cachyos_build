@@ -10,8 +10,6 @@ Ryzen 5 9600X — это микроархитектура **Zen 5**, для GCC 
 |---|---|
 | `.github/workflows/build-zen5.yml` | Workflow сборки: клонирует форк и собирает ядро с параметрами под Zen 5 |
 | `zen5-patches.sh` | Патчит PKGBUILD'ы после клонирования: добавляет `_processor_opt=zen5` (`CONFIG_MZEN5`), запрещает CI понижать оптимизацию до `-Os` |
-| `slim-config.py` | Режет ~1750 лишних драйверных опций в `config` ДО компиляции (режим `trim`) |
-| `modprobed.db` *(опционально)* | База модулей с вашего ПК для `drivers_mode=localmod` |
 
 ## Автономная схема (кто что качает)
 
@@ -72,12 +70,21 @@ _build_nvidia_open = no
 
 1. Push этого репозитория и форка `linux-cachyos` (PKGBUILD'ы качаются из него).
 2. **Actions → Build CachyOS kernel (Zen 5 / Ryzen 5 9600X) → Run workflow**
-   (вариант, LTO, HZ, drivers_mode выбираются в форме запуска).
+   (вариант, LTO, HZ выбираются в форме запуска).
 3. Дождаться артефакта `linux-cachyos-zen5-thin/*.pkg.tar.zst`.
 
 Шаг *Verify* извлекает `.config` из собранного пакета
 (`usr/lib/modules/<ver>/config` — PKGBUILD форка кладёт его внутрь) и требует
 `CONFIG_MZEN5=y`; иначе сборка считается непригодной.
+
+## Конфиг ядра (свой спец-конфиг)
+
+Конфиг берётся из форка как есть: PKGBUILD делает `cp ../config .config`,
+затем поверх через `scripts/config` применяются только параметры запуска
+(`_processor_opt`, `_cpusched`, `_HZ_ticks` и т.д.).
+
+**Свой конфиг = правишь `config` в форке `Yaroslavsfedu/linux-cachyos`**
+(папка выбранного варианта) и push. Workflow ничего не режет и не переписывает.
 
 ## Установка результата на свой 9600X (Arch/CachyOS)
 
@@ -101,24 +108,6 @@ git clone --depth 1 https://github.com/Yaroslavsfedu/linux-cachyos.git
 cd linux-cachyos
 _processor_opt=zen5 _use_llvm_lto=thin _cc_harder=yes makepkg -si --skipchecksums
 ```
-
-## Режимы количества драйверов (drivers_mode)
-
-| режим | что делает | время сборки |
-|---|---|---|
-| `trim` (по умолчанию) | `slim-config.py` ДО компиляции выключает ~1750 опций: VM-драйверы (Xen/Hyper-V/VirtIO/VMware), серверные NIC (Mellanox/Chelsio/QLogic…), RAID/HBA/FC/iSCSI, eMMC/UFS/NVDIMM, кластерные ФС, CAN/NFC/IIO/SPI/MFD, SoC-GPU и legacy-FB, sound-SoC, старый Wi-Fi. Ядро/сеть/ext4-xfs-btrfs/USB-core/BT/Wi-Fi-modern/amdgpu-i915/snd-hda/KVM остаются | заметно меньше 2 ч |
-| `full` | полный дистрибутивный конфиг (~15500 модулей) | ~2 ч |
-| `localmod` | `make localmodconfig` по базе `modprobed.db` с вашего ПК | самая быстрая, ядро ровно под ваше железо |
-
-### localmod: как подготовить базу с вашего ПК (Arch/CachyOS)
-
-```bash
-sudo pacman -S --aur modprobed-db        # или из AUR
-modprobed-db store                        # пишет ~/.local/share/modprobed-db/modprobed.db
-```
-
-Затем закоммитьте полученный файл как `modprobed.db` **в корень этого репозитория**
-(сборщика) и выберите `drivers_mode=localmod` при запуске.
 
 ## Замечания
 
