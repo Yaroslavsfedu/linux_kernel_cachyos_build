@@ -33,6 +33,12 @@ on:
         default: 'thin'
         type: choice
         options: [thin, full, none]
+      autofdo:
+        description: 'AutoFDO: instrumented = сборка с инструментированием (потом снять профиль); profile = финальная сборка с профилем kernel.afdo из форка'
+        required: false
+        default: 'off'
+        type: choice
+        options: [off, instrumented, profile]
 env:
   CCACHE_DIR: /home/builder/.ccache
   PKGS_REPO: https://github.com/Yaroslavsfedu/linux-cachyos.git
@@ -136,9 +142,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-linux-cachyos-${{ inputs.llvm_lto || 'thin' }}-${{ github.run_id }}
+          key: ccache-linux-cachyos-${{ inputs.llvm_lto || 'thin' }}-afdo-${{ inputs.autofdo || 'off' }}-${{ github.run_id }}
           restore-keys: |
-            ccache-linux-cachyos-${{ inputs.llvm_lto || 'thin' }}
+            ccache-linux-cachyos-${{ inputs.llvm_lto || 'thin' }}-afdo-${{ inputs.autofdo || 'off' }}
 
       # КЛЮЧЕВОЕ: целевой CPU = Zen 5 (CONFIG_MZEN5 -> -march=znver5), а не CPU раннера
       - name: Build kernel package (optimized for znver5)
@@ -158,14 +164,27 @@ jobs:
           _build_nvidia_open: no
           _localmodcfg: no
           _use_current: no
+          _autofdo: ${{ (inputs.autofdo || 'off') != 'off' && 'yes' || 'no' }}
+          _autofdo_profile_name: ${{ (inputs.autofdo || 'off') == 'profile' && 'kernel.afdo' || '' }}
         run: |
           cd pkgs/linux-cachyos
           sudo -H -E -u builder makepkg --skipchecksums --syncdeps --noconfirm
 
+      # Instrumented-сборка: vmlinux из srcdir нужен на вашей машине для
+      # create_llvm_prof (конвертация perf.data в AutoFDO-профиль)
+      - name: Upload vmlinux for AutoFDO profiling (instrumented run)
+        if: ${{ (inputs.autofdo || 'off') == 'instrumented' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmlinux-instrumented
+          path: pkgs/linux-cachyos/src/*/vmlinux
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload packages as artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux-cachyos-zen5-${{ inputs.llvm_lto || 'thin' }}
+          name: linux-cachyos-zen5-${{ inputs.llvm_lto || 'thin' }}-afdo-${{ inputs.autofdo || 'off' }}
           path: |
             pkgs/linux-cachyos/*.pkg.tar.zst
             pkgs/linux-cachyos/*.pkg.tar.zst.sig
