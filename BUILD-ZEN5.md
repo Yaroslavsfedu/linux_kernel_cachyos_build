@@ -9,7 +9,7 @@ Zen 5 — микроархитектура AMD (Ryzen 9000), в GCC/Clang она
 | Файл | Назначение |
 |---|---|
 | `.github/workflows/build-zen5.yml` | Workflow сборки: клонирует форк и собирает ядро с параметрами под Zen 5 |
-| `zen5-patches.sh` | Патчит PKGBUILD'ы после клонирования: добавляет `_processor_opt=zen5` (`CONFIG_MZEN5`), запрещает CI понижать оптимизацию до `-Os` |
+| `zen5-patches.sh` | Патчит PKGBUILD'ы после клонирования: запрещает CI понижать оптимизацию до `-Os`. Поддержка `zen5` (`CONFIG_MZEN5`) теперь нативно в форках `linux` (Kconfig + Makefile) и `linux-cachyos` (PKGBUILD) |
 
 ## Автономная схема (кто что качает)
 
