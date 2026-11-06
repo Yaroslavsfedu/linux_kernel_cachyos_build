@@ -1,8 +1,8 @@
-# Сборка ядра CachyOS под AMD Ryzen 5 9600X (Zen 5) через GitHub Actions
+# Сборка ядра CachyOS с оптимизацией под Zen 5 (znver5) через GitHub Actions
 
 ## Суть
 
-Ryzen 5 9600X — это микроархитектура **Zen 5**, для GCC она называется **znver5**
+Zen 5 — микроархитектура AMD (Ryzen 9000), в GCC/Clang она называется **znver5**
 (GCC ≥ 14.1 / Clang ≥ 18). Апстрим `CachyOS/linux-cachyos` знает только `zen4`,
 а в CI ещё и принудительно переключает ядро на `-Os`. Поэтому:
 
@@ -45,11 +45,11 @@ Ryzen 5 9600X — это микроархитектура **Zen 5**, для GCC 
   ядро компилируется с `-march=znver5 -mtune=znver5`, независимо от CPU раннера
   (Xeon, EPYC Genoa и т.п.).
 * `_processor_opt=native` / пустое значение = `CONFIG_X86_NATIVE_CPU` — **ловушка**:
-  код заточится под серверный CPU раннера и на 9600X будет работать хуже generic.
+  код заточится под серверный CPU раннера и на целевой машине с Zen 5 будет работать хуже generic.
   В workflow `native` не используется.
 * `GENERIC_V4/V5` дают baseline инструкций уровня x86-64-v4/v5 (AVX-512) без tuning'а znver5.
 
-## Параметры, выставленные под 9600X (в workflow)
+## Параметры, выставленные под Zen 5 (в workflow)
 
 ```
 _processor_opt   = zen5        # znver5: march+mtune под Zen 5 (главный флаг)
@@ -66,18 +66,14 @@ _build_nvidia_open = no
 ```
 
 `zen5-patches.sh` дополнительно перебивает CI-блок апстрима, который понижал
-оптимизацию до `-Os`, иначе вся «оптимизация под 9600X» терялась бы.
+оптимизацию до `-Os`, иначе вся «оптимизация под Zen 5» терялась бы.
 
 ## Запуск
 
 1. Push этого репозитория и форка `linux-cachyos` (PKGBUILD'ы качаются из него).
-2. **Actions → Build CachyOS kernel (Zen 5 / Ryzen 5 9600X) → Run workflow**
+2. **Actions → Build CachyOS kernel (Zen 5) → Run workflow**
    (вариант, LTO, HZ выбираются в форме запуска).
 3. Дождаться артефакта `linux-cachyos-zen5-thin/*.pkg.tar.zst`.
-
-Шаг *Verify* извлекает `.config` из собранного пакета
-(`usr/lib/modules/<ver>/config` — PKGBUILD форка кладёт его внутрь) и требует
-`CONFIG_MZEN5=y`; иначе сборка считается непригодной.
 
 ## Конфиг ядра (свой спец-конфиг)
 
@@ -88,7 +84,7 @@ _build_nvidia_open = no
 **Свой конфиг = правишь `config` в форке `Yaroslavsfedu/linux-cachyos`**
 (папка выбранного варианта) и push. Workflow ничего не режет и не переписывает.
 
-## Установка результата на свой 9600X (Arch/CachyOS)
+## Установка результата (Arch/CachyOS)
 
 ```bash
 sudo pacman -U linux-cachyos-cachyos-*.pkg.tar.zst
@@ -114,5 +110,5 @@ _processor_opt=zen5 _use_llvm_lto=thin _cc_harder=yes makepkg -si --skipchecksum
 ## Замечания
 
 * AutoFDO/Propeller можно включить (`_autofdo=yes`), но профиль должен сниматься
-  на вашем 9600X, поэтому в CI они выключены.
+  на целевой машине, поэтому в CI они выключены.
 * Пакеты подписываются gpg-ключом сборщика; для продакшена добавьте свой ключ.

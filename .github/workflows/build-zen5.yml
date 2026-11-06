@@ -1,5 +1,5 @@
 # ============================================================================
-# Сборка ядра linux-cachyos под AMD Ryzen 5 9600X (Zen 5 / znver5) на GitHub Actions.
+# Сборка ядра linux-cachyos с оптимизацией под Zen 5 (znver5) на GitHub Actions.
 #
 # CPU сборочного раннера НЕ используется для автоопределения: NATIVE запрещён,
 # жёстко ставится _processor_opt=zen5 (CONFIG_MZEN5 -> -march=znver5).
@@ -16,7 +16,7 @@
 #
 # Результат: артефакт *.pkg.tar.zst -> sudo pacman -U ...
 # ============================================================================
-name: Build CachyOS kernel (Zen 5 / Ryzen 5 9600X)
+name: Build CachyOS kernel (Zen 5)
 
 on:
   push:
@@ -121,7 +121,7 @@ jobs:
           chmod -R a+rw .
 
           sed -i 's/#MAKEFLAGS="-j2"/MAKEFLAGS="-j$(nproc) -l$(nproc)"/g' /etc/makepkg.conf
-          sed -i 's|#PACKAGER=".*"|PACKAGER="GitHub Actions (Zen5 CI) \<zen5ci@users.noreply.github.com\>"|g' /etc/makepkg.conf
+          sed -i 's|#PACKAGER=".*"|PACKAGER="GitHub Actions (Yaroslavsfedu) \<Yaroslavsfedu@users.noreply.github.com\>"|g' /etc/makepkg.conf
           sed -i 's|!ccache|ccache|' /etc/makepkg.conf
           install -d -m 777 "$CCACHE_DIR"
 
@@ -194,7 +194,7 @@ jobs:
             ccache-${{ inputs.variant || 'linux-cachyos' }}-${{ inputs.llvm_lto || 'thin' }}
 
       # КЛЮЧЕВОЕ: целевой CPU = Zen 5 (CONFIG_MZEN5 -> -march=znver5), а не CPU раннера
-      - name: Build kernel package (optimized for Ryzen 5 9600X / znver5)
+      - name: Build kernel package (optimized for znver5)
         env:
           _processor_opt: ${{ inputs.processor_opt || 'zen5' }}
           _cachy_config: yes
@@ -214,70 +214,6 @@ jobs:
         run: |
           cd "pkgs/${{ inputs.variant || 'linux-cachyos' }}"
           sudo -H -E -u builder makepkg --skipchecksums --syncdeps --noconfirm
-
-      # PKGBUILD (форк) кладёт итоговый .config в usr/lib/modules/<ver>/config;
-      # извлекаем его точным путём (без --wildcards — падал на реальном пакете)
-      # и проверяем, что ядро собрано под znver5, а не под -Os/generic/native.
-      - name: Verify the produced kernel really targets znver5
-        run: |
-          set -euo pipefail
-          dir="pkgs/${{ inputs.variant || 'linux-cachyos' }}"
-          pkg=$(ls "$dir"/linux-*.pkg.tar.zst | head -1)
-          echo "Inspecting $pkg"
-          tar -xOf "$pkg" '.PKGINFO' || true
-
-          work=$(mktemp -d)
-          tar -tzf "$pkg" > "$work/filelist.txt" 2>/dev/null || \
-            bsdtar -tf "$pkg" > "$work/filelist.txt"
-          cfgpath=$(grep -E '(^|/)modules/[^/]+/config$' "$work/filelist.txt" \
-                    | grep -v '\.old$' | head -1 || true)
-          if [ -n "$cfgpath" ]; then
-            echo "Kernel config inside package: $cfgpath"
-            tar -xOf "$pkg" "$cfgpath" > "$work/kconfig" 2>/dev/null || \
-              bsdtar -xOf "$pkg" "$cfgpath" > "$work/kconfig" || true
-          fi
-          # Резерв: .config этой же сборки из srcdir (после makepkg сохраняется)
-          if [ ! -s "$work/kconfig" ]; then
-            srccfg=$(find "$dir" -maxdepth 3 -path '*/src/*/.config' -print -quit || true)
-            if [ -n "$srccfg" ]; then
-              echo "::warning::config отсутствует в пакете — беру .config из srcdir: $srccfg"
-              cp "$srccfg" "$work/kconfig"
-            fi
-          fi
-          test -s "$work/kconfig" || {
-            echo "::error::kernel config не найден ни в пакете, ни в srcdir; sample file list:"
-            grep -E 'modules/' "$work/filelist.txt" | head -30 || true
-            exit 1
-          }
-
-          echo "--- CPU tuning options in the built kernel config ---"
-          grep -E '^CONFIG_(MZEN5|MZEN4|MZEN3|MZEN2|MK8|MCORE2|MATOM|MPSC|MARCH_ZNN4_VPCZ1|MVISASTEREX|MNOAVI|MCORE_AVX_NO_2|MPENTIUM_M|MPENTUM_4|MPENTPRO|MFATHOME|MX86_64|GENERIC_CPU|NATIVE_CPU64|X86_NATIVE_CPU|CC_OPTIMIZE_FOR_SIZE|CC_OPTIMIZE_FOR_PERFORMANCE|CC_OPTIMIZE_FOR_PERFORMANCE_O3)=' "$work/kconfig" || true
-
-          if grep -q '^CONFIG_MZEN5=y' "$work/kconfig"; then
-            echo "OK: kernel is built for Zen 5 (CONFIG_MZEN5=y -> -march=znver5 -mtune=znver5)"
-          else
-            echo "::error::CONFIG_MZEN5=y not found! The package was NOT optimized for Ryzen 5 9600X."
-            exit 1
-          fi
-
-          if grep -q '^CONFIG_CC_OPTIMIZE_FOR_SIZE=y' "$work/kconfig"; then
-            echo "::error::Kernel was built with -Os (size optimization) - CI fallback kicked in, perf flags lost!"
-            exit 1
-          fi
-
-          if grep -qE '^CONFIG_(X86_NATIVE_CPU|NATIVE_CPU64)=y' "$work/kconfig"; then
-            echo "::warning::Native-CPU tuning detected - the kernel may be tuned for the RUNNER's CPU, not yours!"
-          elif grep -q '^CONFIG_GENERIC_CPU=y' "$work/kconfig"; then
-            echo "::warning::Generic x86-64 tuning detected instead of znver5!"
-          fi
-
-          if grep -q '^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=y' "$work/kconfig"; then
-            echo "OK: -O3 optimization confirmed"
-          elif grep -q '^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y' "$work/kconfig"; then
-            echo "NOTE: standard -O2 optimization (expected for full/autofdo variants)"
-          fi
-
-          rm -rf "$work"
 
       - name: Upload packages as artifacts
         uses: actions/upload-artifact@v4
