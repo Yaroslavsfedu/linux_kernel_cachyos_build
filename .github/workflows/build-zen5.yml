@@ -7,12 +7,11 @@
 # Автономная схема:
 #   этот репозиторий  = только сборщик (workflow, zen5-patches.sh, branch-source.sh);
 #   PKGBUILD + config = клонируются из форка Yaroslavsfedu/linux-cachyos;
-#   tarball исходников= РЕЖИМ branch (по умолчанию): git-archive снапшот tip'а ветки
-#                       форка Yaroslavsfedu/linux (по умолчанию 7.3/cachy) — только
-#                       файлы, без истории. РЕЖИМ release: релиз форка
-#                       (зеркало CachyOS/linux; создать/обновить:
-#                       ./mirror-release.sh cachyos-X.Y.Z-N в форке), fallback
-#                       на релиз CachyOS/linux.
+#   tarball исходников= git-archive снапшот tip'а ветки форка Yaroslavsfedu/linux
+#                       (по умолчанию 7.4/cachy) — только файлы, без истории.
+#
+# Все параметры сборки предопределены; в форме запуска спрашиваются только
+# ветка исходников ядра и режим LTO.
 #
 # Результат: артефакт *.pkg.tar.zst -> sudo pacman -U ...
 # ============================================================================
@@ -23,54 +22,24 @@ on:
     paths-ignore: ['**.md']
   workflow_dispatch:
     inputs:
-      variant:
-        description: 'Вариант ядра (папка в форке Yaroslavsfedu/linux-cachyos)'
-        required: true
-        default: 'linux-cachyos'
-        type: choice
-        options: [linux-cachyos, linux-cachyos-bore, linux-cachyos-eevdf, linux-cachyos-bmq, linux-cachyos-hardened, linux-cachyos-lts, linux-cachyos-rc, linux-cachyos-rt-bore, linux-cachyos-server, linux-cachyos-deckify]
-      processor_opt:
-        description: 'Оптимизация компилятора под CPU'
-        required: true
-        default: 'zen5'
-        type: choice
-        options: [zen5, zen4, GENERIC_V4, GENERIC_V3, generic]
+      kernel_branch:
+        description: 'Ветка форка Yaroslavsfedu/linux (источник исходников)'
+        required: false
+        default: '7.4/cachy'
+        type: string
       llvm_lto:
         description: 'LLVM LTO режим'
-        required: true
+        required: false
         default: 'thin'
         type: choice
         options: [thin, full, none]
-      cpusched:
-        description: 'CPU-планировщик'
-        required: true
-        default: 'cachyos'
-        type: choice
-        options: [cachyos, bore, eevdf, bmq]
-      hz:
-        description: 'Tick rate (HZ)'
-        required: true
-        default: '1000'
-        type: choice
-        options: ['1000', '750', '600', '500', '300', '250', '100']
-      source_mode:
-        description: 'Куда идти за исходниками ядра'
-        required: true
-        default: 'branch'
-        type: choice
-        options: [branch, release]
-      kernel_branch:
-        description: 'Ветка форка Yaroslavsfedu/linux (режим source_mode=branch)'
-        required: false
-        default: '7.3/cachy'
-        type: string
 env:
   CCACHE_DIR: /home/builder/.ccache
   PKGS_REPO: https://github.com/Yaroslavsfedu/linux-cachyos.git
 
 jobs:
   build:
-    name: ${{ inputs.variant || 'linux-cachyos' }} (${{ inputs.processor_opt || 'zen5' }})
+    name: linux-cachyos (${{ inputs.kernel_branch || '7.4/cachy' }}, LTO=${{ inputs.llvm_lto || 'thin' }})
     runs-on: ubuntu-24.04
     container:
       image: archlinux/archlinux:base-devel
@@ -142,66 +111,44 @@ jobs:
           git clone --depth 1 "$PKGS_REPO" pkgs
           # клон идёт от root, а makepkg пишет от builder — открыть права
           chmod -R a+rwX pkgs
-          variant="${{ inputs.variant || 'linux-cachyos' }}"
-          if [ ! -f "pkgs/$variant/PKGBUILD" ]; then
-            echo "::error::В форке нет варианта pkgs/$variant (репо $PKGS_REPO)"
+          if [ ! -f "pkgs/linux-cachyos/PKGBUILD" ]; then
+            echo "::error::В форке нет варианта pkgs/linux-cachyos (репо $PKGS_REPO)"
             ls pkgs
             exit 1
           fi
-          echo "== PKGBUILD: $variant =="
+          echo "== PKGBUILD: linux-cachyos =="
 
       - name: Patch PKGBUILDs for Zen 5 (znver5) support
         run: |
           chmod +x zen5-patches.sh
           ./zen5-patches.sh pkgs
 
-      # Режим branch (по умолчанию): исходники ядра = git-archive снапшот tip'а
-      # ветки форка Yaroslavsfedu/linux — только файлы, без истории и релизов.
-      # Подпись и b2sum релиза на подвижный снапшот не рассчитаны —
-      # makepkg в CI и так вызывается с --skipchecksums.
+      # Исходники ядра = git-archive снапшот tip'а ветки форка Yaroslavsfedu/linux
+      # — только файлы, без истории и релизов. Подпись и b2sum релиза на подвижный
+      # снапшот не рассчитаны — makepkg в CI и так вызывается с --skipchecksums.
       - name: Kernel source = fork branch snapshot (git archive, no history)
-        if: ${{ (inputs.source_mode || 'branch') == 'branch' }}
         run: |
-          export LINUX_BRANCH="${{ inputs.kernel_branch || '7.3/cachy' }}"
+          export LINUX_BRANCH="${{ inputs.kernel_branch || '7.4/cachy' }}"
           chmod +x branch-source.sh
-          ./branch-source.sh "pkgs/${{ inputs.variant || 'linux-cachyos' }}"
-
-      # Режим release: релиз форка, если тарбалла там ещё нет —
-      # релиз CachyOS/linux под ВЕРСИЮ PKGBUILD (тег _srcname), а не "последний какой есть".
-      - name: Kernel source URL check (fork release -> CachyOS fallback)
-        if: ${{ (inputs.source_mode || 'branch') == 'release' }}
-        run: |
-          dir="pkgs/${{ inputs.variant || 'linux-cachyos' }}"
-          cd "$dir"
-          srcname="$( (source ./PKGBUILD 2>/dev/null; printf '%s' "${_srcname:-}") )"
-          test -n "$srcname" || { echo "::error::не удалось определить _srcname из PKGBUILD"; exit 1; }
-
-          mine="https://github.com/Yaroslavsfedu/linux-cachyos/releases/download/${srcname}/${srcname}.tar.gz"
-          if curl -fsIL --max-time 30 "$mine" > /dev/null 2>&1; then
-            echo "OK: релиз форка содержит исходники ${srcname}"
-          else
-            echo "::warning::релиз форка с ${srcname} не найден — fallback на CachyOS/linux"
-            sed -i 's|https://github.com/Yaroslavsfedu/linux-cachyos/releases/download|https://github.com/CachyOS/linux/releases/download|' PKGBUILD
-            grep -n 'releases/download' PKGBUILD
-          fi
+          ./branch-source.sh pkgs/linux-cachyos
 
       - name: Restore ccache
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ inputs.variant || 'linux-cachyos' }}-${{ inputs.llvm_lto || 'thin' }}-${{ github.run_id }}
+          key: ccache-linux-cachyos-${{ inputs.llvm_lto || 'thin' }}-${{ github.run_id }}
           restore-keys: |
-            ccache-${{ inputs.variant || 'linux-cachyos' }}-${{ inputs.llvm_lto || 'thin' }}
+            ccache-linux-cachyos-${{ inputs.llvm_lto || 'thin' }}
 
       # КЛЮЧЕВОЕ: целевой CPU = Zen 5 (CONFIG_MZEN5 -> -march=znver5), а не CPU раннера
       - name: Build kernel package (optimized for znver5)
         env:
-          _processor_opt: ${{ inputs.processor_opt || 'zen5' }}
+          _processor_opt: zen5
           _cachy_config: yes
-          _cpusched: ${{ inputs.cpusched || 'cachyos' }}
+          _cpusched: cachyos
           _use_llvm_lto: ${{ inputs.llvm_lto || 'thin' }}
           _cc_harder: yes
-          _HZ_ticks: ${{ inputs.hz || '1000' }}
+          _HZ_ticks: '1000'
           _tickrate: full
           _preempt: full
           _hugepage: always
@@ -212,7 +159,7 @@ jobs:
           _localmodcfg: no
           _use_current: no
         run: |
-          cd "pkgs/${{ inputs.variant || 'linux-cachyos' }}"
+          cd pkgs/linux-cachyos
           sudo -H -E -u builder makepkg --skipchecksums --syncdeps --noconfirm
 
       - name: Upload packages as artifacts
@@ -220,7 +167,7 @@ jobs:
         with:
           name: linux-cachyos-zen5-${{ inputs.llvm_lto || 'thin' }}
           path: |
-            pkgs/${{ inputs.variant || 'linux-cachyos' }}/*.pkg.tar.zst
-            pkgs/${{ inputs.variant || 'linux-cachyos' }}/*.pkg.tar.zst.sig
+            pkgs/linux-cachyos/*.pkg.tar.zst
+            pkgs/linux-cachyos/*.pkg.tar.zst.sig
           if-no-files-found: error
           retention-days: 14
